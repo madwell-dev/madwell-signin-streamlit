@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import datetime, timedelta
 from typing import List, Dict
 
@@ -7,20 +6,10 @@ import pandas as pd
 from pandas.io.formats.style import Styler
 import requests
 import streamlit as st
-from dotenv import load_dotenv
 
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
 HEADERS = {'User-Agent': USER_AGENT}
 DATE_FORMAT = '%m/%d/%Y %I:%M %p'
-
-def load_environment_variables():
-    load_dotenv()
-    return {
-        'roaster_url': os.getenv('ROASTER_URL'),
-        'pto_url': os.getenv('PTO_URL'),
-        'username': os.getenv('USERNAME'),
-        'password': os.getenv('PASSWORD')
-    }
 
 def load_css(filename: str):
     st.markdown(f'<style>{open(filename).read()}</style>', unsafe_allow_html=True)
@@ -119,10 +108,9 @@ def create_styled_dataframe(signin_summary: List[Dict]) -> Styler:
 def main():
     st.title("Madwell Signin App")
     load_css("style.css")
-    
-    env_vars = load_environment_variables()
-    employees_df = pd.read_csv(env_vars['roaster_url'])
-    pto_calendar = fetch_pto_data(env_vars['pto_url'], env_vars['username'], env_vars['password'])
+
+    employees_df = pd.read_csv(st.secrets['roaster_url'])
+    pto_calendar = fetch_pto_data(st.secrets['pto_url'], st.secrets['username'], st.secrets['password'])
     
     uploaded_files = st.file_uploader("Choose CSV file(s) of weekly signin data. [ Sunday to Saturday ]", accept_multiple_files=True, type="csv")
     
