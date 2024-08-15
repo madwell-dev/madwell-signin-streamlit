@@ -1,0 +1,25 @@
+.main .block-container {
+  max-width: 100%;
+}
+
+#madwell-signin-app,
+#weekly-signin-data,
+.element-container:has(#weekly-signin-data) + .element-container p {
+  text-align: center;
+}
+
+.element-container:has([data-testid="stFileUploader"]),
+.element-container:has([data-testid="stFileUploader"]) + .element-container {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+[data-testid="stFullScreenFrame"]:has(.stDataFrame) {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+td[id^="glide-cell-3"] {
+  text-align: center;
+}
