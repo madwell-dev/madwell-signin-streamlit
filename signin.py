@@ -90,17 +90,18 @@ def get_pto_dates(pto_calendar: List[Dict], pto_name: str, date_range: pd.Dateti
 def process_employee_signin(row, signin_df, date_range, pto_calendar) -> Dict:
     name, pto_name, dept, office, required_days = row['FULL_NAME'], row['JW_NAME'], row['DEPARTMENT'], row['OFFICE'], row['REQUIRED_DAYS']
     
+    day_order = ['Tue', 'Wed', 'Thu']
     present_days = signin_df[signin_df['Name'] == name]
     present_days = present_days[present_days['In time'].dt.strftime('%a').isin(['Tue', 'Wed', 'Thu'])]
     present_dates = list(set(present_days['In time'].dt.strftime('%m/%d/%Y').tolist()))
-    present_day_names = sorted(set(present_days['In time'].dt.strftime('%a')))
-    
+    present_day_names = set(present_days['In time'].dt.strftime('%a'))
+    present_day_names = sorted(present_day_names, key=lambda x: day_order.index(x))
     pto_dates = get_pto_dates(pto_calendar, pto_name, date_range)
     pto_count = len(pto_dates)
     updated_required_days = max(0, required_days - pto_count)
     present_count = min(updated_required_days, len(present_days))
     status_ok = not (present_count < updated_required_days)
-    absent_days = [item for item in ["Tue", "Wed", "Thu"] if item not in present_day_names]
+    absent_days = [item for item in ['Tue', 'Wed', 'Thu'] if item not in present_day_names]
     if status_ok:
         absent_days = []
 
