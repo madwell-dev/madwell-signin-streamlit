@@ -132,7 +132,7 @@ def create_styled_dataframe(signin_summary: List[Dict]) -> Styler:
         signin_details = row['SIGNIN DETAILS'].split(' ')
         present_days = int(signin_details[0])
         required_days = int(signin_details[2])
-        return ['background-color: rgba(50,0,0,0.5);' if present_days < required_days else ''] * len(row)
+        return ['background-color: rgba(251, 231, 239, 0.5);' if present_days < required_days else ''] * len(row)
     
     return df.style.apply(highlight_row, axis=1)
 
@@ -159,7 +159,7 @@ def main():
 
         dynamic_filters = DynamicFilters(signin_summary_df, filters=['STATUS', 'OFFICE', 'SIGNIN DAYS', 'USED PTOs'])
         with st.sidebar:
-            st.subheader("Apply filters you want to 👇")
+            st.subheader("Apply filter(s) you want to 👇")
         dynamic_filters.display_filters(location='sidebar')
         filtered_df = dynamic_filters.filter_df()
         
