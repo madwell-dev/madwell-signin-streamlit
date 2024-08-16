@@ -8,7 +8,6 @@ from pandas.io.formats.style import Styler
 import requests
 import streamlit as st
 
-# Gatekeeper
 def check_password():
     def password_entered():
         if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
@@ -26,7 +25,6 @@ def check_password():
 if not check_password():
     st.stop()
 
-# Signin App
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
 HEADERS = {'User-Agent': USER_AGENT}
 DATE_FORMAT = '%m/%d/%Y %I:%M %p'
