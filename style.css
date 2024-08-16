@@ -23,3 +23,8 @@
 td[id^="glide-cell-3"] {
   text-align: center;
 }
+
+.stHtml:has(.num-of-rows) {
+  display: flex;
+  justify-content: center;
+}
