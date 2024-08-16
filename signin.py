@@ -2,10 +2,28 @@ import json
 from datetime import datetime, timedelta
 from typing import List, Dict
 
+import hmac
 import pandas as pd
 from pandas.io.formats.style import Styler
 import requests
 import streamlit as st
+
+def check_password():
+    def password_entered():
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+            st.session_state["password"] = ""
+    if st.session_state.get("password_correct", False):
+        return True
+    st.text_input("Password", type="password", on_change=password_entered, key="password")
+    if "password_correct" in st.session_state:
+        st.error("😕 Password incorrect")
+    return False
+if not check_password():
+    st.stop()
 
 USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
 HEADERS = {'User-Agent': USER_AGENT}
@@ -36,11 +54,13 @@ def combine_csv_files(uploaded_files) -> pd.DataFrame:
 def calculate_date_range(combined_df: pd.DataFrame) -> tuple:
     combined_df['In time'] = pd.to_datetime(combined_df['In time'], format=DATE_FORMAT)
     min_date = combined_df['In time'].min()
-    if min_date.weekday() == 6:
-        min_date += timedelta(days=1)
+    max_date = combined_df['In time'].max()
+    more_than_7_days = (max_date - min_date).days > 7
     start_date = (min_date - timedelta(days=min_date.weekday() + 1)).replace(hour=1, minute=0, second=0, microsecond=0)
+    if min_date.weekday() == 6:
+        start_date += timedelta(days=7)
     end_date = start_date + timedelta(days=6)
-    return start_date, end_date
+    return start_date, end_date, more_than_7_days, min_date, max_date
 
 def load_signin_data(uploaded_files) -> tuple:
     if not uploaded_files:
@@ -48,9 +68,12 @@ def load_signin_data(uploaded_files) -> tuple:
         return pd.DataFrame(), datetime.now(), datetime.now()
     
     combined_df = combine_csv_files(uploaded_files)
-    start_date, end_date = calculate_date_range(combined_df)
-    
-    st.success(f"Successfully uploaded {len(combined_df)} lines of data.")
+    start_date, end_date, more_than_7_days, min_date, max_date = calculate_date_range(combined_df)
+    if more_than_7_days:
+        st.warning(f"Your data covers more than 7 days ({min_date.strftime('%m/%d/%Y')} - {max_date.strftime('%m/%d/%Y')}). Please upload only 7 days of data [Sun-Sat].")
+        st.stop()
+    else:
+        st.success(f"Successfully uploaded {len(combined_df)} lines of data.")
     return combined_df, start_date, end_date
 
 def get_pto_dates(pto_calendar: List[Dict], pto_name: str, date_range: pd.DatetimeIndex) -> List[datetime]:
