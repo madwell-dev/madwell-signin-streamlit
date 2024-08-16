@@ -99,33 +99,39 @@ def process_employee_signin(row, signin_df, date_range, pto_calendar) -> Dict:
     pto_count = len(pto_dates)
     updated_required_days = max(0, required_days - pto_count)
     present_count = min(updated_required_days, len(present_days))
-    
+    status_ok = not (present_count < updated_required_days)
+    absent_days = [item for item in ["Tue", "Wed", "Thu"] if item not in present_day_names]
+    if status_ok:
+        absent_days = []
+
     return {
         'NAME': name,
         'DEPT': dept,
         'OFFICE': office,
-        'STATUS': "X" if present_count < updated_required_days else "O",
-        'SIGNIN DETAILS': f"{present_count} / {updated_required_days} [ PTOs={pto_count} ]",
+        'STATUS': "O" if status_ok else "X",
         'SIGNIN DAYS': '/'.join(present_day_names) if present_day_names else 'NO SIGNIN',
+        'ABSENT DAYS': '/'.join(absent_days) if absent_days else 'N/A',
+        'SIGNIN DETAILS': f"{present_count} / {updated_required_days} [ PTOs={pto_count} ]",
         'PTO DAYS': ', '.join(sorted([date.strftime('%a') for date in pto_dates])) if pto_dates else 'N/A',
         'USED PTOs': len(pto_dates),
         'PRESENT': sorted(present_dates),
+        'REQUIRED': required_days,
     }
 
 def process_signin(signin_df: pd.DataFrame, date_range: pd.DatetimeIndex, employees_df: pd.DataFrame, pto_calendar: List[Dict]) -> List[Dict]:
     signin_summary = [process_employee_signin(row, signin_df, date_range, pto_calendar) for _, row in employees_df.iterrows()]
+    signin_summary = [row for row in signin_summary if row['REQUIRED'] != 0]
     return signin_summary
 
 def create_styled_dataframe(signin_summary: List[Dict]) -> Styler:
     df = pd.DataFrame(signin_summary)
-    df = df[df['SIGNIN DETAILS'].apply(lambda x: int(x.split(' ')[2]) != 0)]
     df = df.sort_values(by=['OFFICE', 'DEPT', 'NAME'])
     
     def highlight_row(row):
         signin_details = row['SIGNIN DETAILS'].split(' ')
         present_days = int(signin_details[0])
         required_days = int(signin_details[2])
-        return ['background-color: rgba(50,0,0,0.5); text-align: center;' if present_days < required_days else ''] * len(row)
+        return ['background-color: rgba(50,0,0,0.5);' if present_days < required_days else ''] * len(row)
     
     return df.style.apply(highlight_row, axis=1)
 
@@ -158,7 +164,7 @@ def main():
         
         styled_signin_table = create_styled_dataframe(filtered_df.to_dict('records'))
         st.dataframe(styled_signin_table, hide_index=True)
-        st.write(f"Number of rows: {len(filtered_df)}")
+        st.html(f"<code class='num-of-rows'>Number of rows: {len(filtered_df)}</code>")
 
 if __name__ == "__main__":
     main()
