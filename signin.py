@@ -7,6 +7,7 @@ import pandas as pd
 from pandas.io.formats.style import Styler
 import requests
 import streamlit as st
+from streamlit_dynamic_filters import DynamicFilters
 
 def check_password():
     def password_entered():
@@ -142,11 +143,22 @@ def main():
     if not signin_df.empty:
         date_range = pd.date_range(start=start_date, end=end_date)
         signin_summary = process_signin(signin_df, date_range, employees_df, pto_calendar)
-        styled_signin_table = create_styled_dataframe(signin_summary)
+        # styled_signin_table = create_styled_dataframe(signin_summary)
+        signin_summary_df = pd.DataFrame(signin_summary)
         
         st.subheader("Weekly Signin Data")
         st.write(f"[ Week of {start_date.strftime('%m/%d/%Y')} - {end_date.strftime('%m/%d/%Y')} ]")
+        # st.dataframe(styled_signin_table, hide_index=True)
+
+        dynamic_filters = DynamicFilters(signin_summary_df, filters=['STATUS', 'OFFICE', 'SIGNIN DAYS', 'USED PTOs'])
+        with st.sidebar:
+            st.subheader("Apply filters you want to 👇")
+        dynamic_filters.display_filters(location='sidebar')
+        filtered_df = dynamic_filters.filter_df()
+        
+        styled_signin_table = create_styled_dataframe(filtered_df.to_dict('records'))
         st.dataframe(styled_signin_table, hide_index=True)
+        st.write(f"Number of rows: {len(filtered_df)}")
 
 if __name__ == "__main__":
     main()
