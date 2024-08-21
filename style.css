@@ -9,7 +9,8 @@
 }
 
 .element-container:has([data-testid="stFileUploader"]),
-.element-container:has([data-testid="stFileUploader"]) + .element-container {
+.element-container:has([data-testid="stFileUploader"]) + .element-container,
+.stAlert {
   max-width: 800px;
   margin: 0 auto;
 }
