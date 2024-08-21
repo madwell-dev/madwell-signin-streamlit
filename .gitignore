@@ -1,5 +1,5 @@
 .DS_Store
 /data
+/draft
 /.env
 /.streamlit/secrets.toml
-draft.py
