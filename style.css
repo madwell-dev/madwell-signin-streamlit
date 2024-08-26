@@ -29,3 +29,12 @@ td[id^="glide-cell-3"] {
   display: flex;
   justify-content: center;
 }
+
+section[data-testid="stSidebar"] {
+  background-color: transparent;
+  border-right: 1px solid #eee;
+}
+
+div[data-baseweb="select"] > div[class^="st-"] {
+  background-color: rgb(240, 242, 246);
+}

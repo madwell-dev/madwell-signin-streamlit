@@ -11,10 +11,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, TypedDict, Tuple
 
 import hmac
-import altair as alt
 import pandas as pd
 from pandas import DataFrame, DatetimeIndex
 from pandas.io.formats.style import Styler
+import plotly.express as px
 import requests
 import streamlit as st
 
@@ -26,7 +26,8 @@ USER_AGENT: str = (
 )
 HEADERS: Dict[str, str] = {"User-Agent": USER_AGENT}
 DATE_FORMAT: str = "%m/%d/%Y %I:%M %p"
-STATUS_X_BG_COLOR = "rgba(251, 231, 239, 0.5)"
+STATUS_X_BG_COLOR = "rgba(255, 43, 43, 0.09)"
+STATUS_O_BG_COLOR = "rgba(33, 195, 84, 0.1)"
 
 
 ### Type Definitions ###
@@ -48,40 +49,12 @@ class PTOData(TypedDict):
     A TypedDict representing the data for Paid Time Off (PTO).
 
     Attributes:
-        employeeId (str): The ID of the employee.
         name (str): The name of the employee.
-        leaveType (str): The type of leave.
-        leaveTypeDescription (str): The description of the leave type.
-        status (str): The status of the leave request.
-        leaveRequest (str): The leave request details.
-        checksum (str): The checksum for the leave request.
-        startDate (str): The start date of the leave.
-        endDate (str): The end date of the leave.
-        comments (str): Any comments related to the leave.
         leaveDates (List[str]): The dates of the leave.
-        vouchers (List): The vouchers associated with the leave.
-        leaveHours (int): The total leave hours.
-        leaveHourDetails (List[LeaveHourDetail]): The details of leave hours.
-        absenceCodeReason (str): The reason code for the absence.
-        ptoRegisterTypeCode (str): The register type code for the PTO.
     """
 
-    employeeId: str
     name: str
-    leaveType: str
-    leaveTypeDescription: str
-    status: str
-    leaveRequest: str
-    checksum: str
-    startDate: str
-    endDate: str
-    comments: str
     leaveDates: List[str]
-    vouchers: List[any]
-    leaveHours: int
-    leaveHourDetails: List[LeaveHourDetail]
-    absenceCodeReason: str
-    ptoRegisterTypeCode: str
 
 
 class SignInData(TypedDict):
@@ -180,7 +153,9 @@ def fetch_pto_data(pto_url: str, username: str, password: str) -> List[PTOData]:
         )
         response.raise_for_status()
         pto_calendar_json: str = response.text
-        return json.loads(pto_calendar_json)["requestList"]
+        pto_json = json.loads(pto_calendar_json)["requestList"]
+        simplified_pto_data = [{"name": entry["name"], "leaveDates": entry["leaveDates"]} for entry in pto_json]
+        return simplified_pto_data
     except (
         requests.exceptions.HTTPError,
         requests.exceptions.RequestException,
@@ -679,7 +654,6 @@ def draw_chart(signin_summary: list) -> None:
         )
         for department in departments
     ]
-    max_num_in_chart = max(num_of_employees_by_dept) + 1
     chart_data = DataFrame(
         {
             "Departments": departments,
@@ -687,30 +661,49 @@ def draw_chart(signin_summary: list) -> None:
             "X of Employees": x_of_employees_by_dept,
         }
     )
-    chart_data_long = chart_data.melt(
-        id_vars="Departments", var_name="Color_Key", value_name="Count"
-    )
-    combined_chart = (
-        alt.Chart(chart_data_long)
-        .mark_bar()
-        .encode(
-            x=alt.X("Departments:N", title="Departments"),
-            y=alt.Y(
-                "Count:Q", title="Count", scale=alt.Scale(domain=[0, max_num_in_chart])
-            ),
-            color=alt.Color(
-                "Color_Key:N",
-                scale=alt.Scale(range=["#ddffdd", "#ff3377"]),
-                legend=alt.Legend(title="", orient="top-right"),
-            ),
-            xOffset="Color_Key:N",
-        )
-        .properties(
-            width="container",
-        )
-    )
-    st.altair_chart(combined_chart, use_container_width=True)
+    chart_data = chart_data.sort_values(by="Departments")
+    max_of_yaxis = max(num_of_employees_by_dept) + 1
 
+    bar_fig = px.bar(
+        chart_data,
+        x="Departments",
+        y=["Num of Employees", "X of Employees"],
+        barmode="group",
+        title="Department Summary",
+        labels={"value": "Count", "variable": "Status"},
+        color_discrete_sequence=[STATUS_O_BG_COLOR, STATUS_X_BG_COLOR],
+    )
+    bar_fig.update_layout(
+        title={
+            'text': "Department Summary",
+            'x': 0.5,
+            'xanchor': 'center',
+        },
+        legend={
+            'title': None,
+            'xanchor': 'right',
+        },
+        yaxis={
+            'range': [0, max_of_yaxis],
+        },
+    )
+    st.plotly_chart(bar_fig)
+
+    with st.sidebar:
+        num_of_all_employees = len(signin_summary)
+        num_of_x_employees = sum(1 for entry in signin_summary if entry["STATUS"] == "X")
+        pie_fig = px.pie(
+            values=[num_of_all_employees - num_of_x_employees, num_of_x_employees],
+            names=["O", "X"],
+            category_orders={"names": ["O", "X"]},
+            title="Signin Status",
+            color=["O", "X"],
+            color_discrete_map={"O": STATUS_O_BG_COLOR, "X": STATUS_X_BG_COLOR},
+        )
+        pie_fig.update_layout(
+            paper_bgcolor='white',
+        )
+        st.plotly_chart(pie_fig)
 
 ### Main Function ###
 def main() -> None:
