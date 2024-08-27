@@ -31,7 +31,7 @@ td[id^="glide-cell-3"] {
 }
 
 section[data-testid="stSidebar"] {
-  background-color: transparent;
+  background-color: white;
   border-right: 1px solid #eee;
 }
 
