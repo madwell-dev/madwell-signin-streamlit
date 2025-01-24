@@ -8,15 +8,16 @@ using Streamlit and Altair.
 
 import json
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, TypedDict, Tuple
-
+from typing import List, Dict, Any, TypedDict, Tuple, Optional
 import hmac
 import pandas as pd
 from pandas import DataFrame, DatetimeIndex
 from pandas.io.formats.style import Styler
 import plotly.express as px
 import requests
+from icalendar import Calendar
 import streamlit as st
+
 
 ### Constants ###
 USER_AGENT: str = (
@@ -56,7 +57,6 @@ class PTOData(TypedDict):
     name: str
     leaveDates: List[str]
 
-
 class SignInData(TypedDict):
     """
     A TypedDict representing the sign-in data for an employee.
@@ -90,10 +90,6 @@ class SignInData(TypedDict):
 
 ### Authentication Functions ###
 def password_entered() -> None:
-    """
-    Handles the password input and checks if it matches the stored secret password.
-    Updates the session state based on the comparison result.
-    """
     if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
         st.session_state["password_correct"] = True
         del st.session_state["password"]
@@ -101,15 +97,7 @@ def password_entered() -> None:
         st.session_state["password_correct"] = False
         st.session_state["password"] = ""
 
-
 def check_password() -> bool:
-    """
-    Prompts the user to enter a password and checks if it is correct.
-    Returns True if the password is correct, otherwise False.
-
-    Returns:
-        bool: True if the password is correct, False otherwise.
-    """
     if st.session_state.get("password_correct", False):
         return True
     st.text_input(
@@ -133,70 +121,127 @@ def load_css(filename: str) -> None:
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
-### Data Fetching Functions ###
-@st.cache_data(ttl=600)
-def fetch_pto_data(pto_url: str, username: str, password: str) -> List[PTOData]:
-    """
-    Fetches PTO data from the given URL using the provided username and password.
-
-    Args:
-        pto_url (str): The URL to fetch PTO data from.
-        username (str): The username for authentication.
-        password (str): The password for authentication.
-
-    Returns:
-        List[PTOData]: A list of PTO data dictionaries. Returns an empty list if an error occurs.
-    """
+### Data Fetching Functions for roaster sheet and Justworks iCal ###
+def get_roaster() -> Optional[DataFrame]:
+    roaster_sheet = st.secrets["roaster_sheet"]
     try:
-        response: requests.Response = requests.get(
-            pto_url, auth=(username, password), headers=HEADERS, timeout=10
+        response_roaster = requests.get(roaster_sheet, headers={
+            "User-Agent": USER_AGENT
+        }, timeout=10)
+        response_roaster.raise_for_status()
+        df_roaster = pd.read_csv(pd.io.common.StringIO(response_roaster.text))
+        return df_roaster
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return None
+
+def get_ical_data() -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    justworks_url = st.secrets["justworks_ical"]
+
+    try:
+        response = requests.get(
+            justworks_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=10
         )
         response.raise_for_status()
-        pto_calendar_json: str = response.text
-        pto_json = json.loads(pto_calendar_json)["requestList"]
-        simplified_pto_data = [{"name": entry["name"], "leaveDates": entry["leaveDates"]} for entry in pto_json]
-        return simplified_pto_data
+        calendar = Calendar.from_ical(response.text)
+        ptos = []
+        holidays = []
+
+        for component in calendar.walk():
+            if component.name == "VEVENT":
+                # Normalize summary to lowercase and collapse whitespace (e.g. "John  E. PTO" -> "john e. pto")
+                summary = " ".join(filter(None, str(component.get("summary", "")).lower().split()))
+
+                holiday_names = ["new year's day", "martin luther king jr. day", "presidents' day", "memorial day", "juneteenth", "independence day", "labor day", "columbus day", "veterans day", "thanksgiving", "day after thanksgiving", "christmas eve", "christmas day", "holiday break"]
+                if "pto" in summary:
+                    event = {
+                        "summary": str(component.get("summary", "")),
+                        "start_date": component.get("dtstart").dt.strftime("%Y-%m-%d"),
+                        "end_date": component.get("dtend").dt.strftime("%Y-%m-%d")
+                    }
+                    ptos.append(event)
+                elif summary in holiday_names:
+                    event = {
+                        "summary": str(component.get("summary", "")),
+                        "start_date": component.get("dtstart").dt.strftime("%Y-%m-%d"),
+                        "end_date": component.get("dtend").dt.strftime("%Y-%m-%d")
+                    }
+                    holidays.append(event)
+
+        # Add end of year holiday break (summary is "Holiday Break")
+        holidays.append({"summary": "Holiday Break", "start_date": "2024-12-30", "end_date": "2025-01-01"})
+
+        return (ptos, holidays)
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching calendar data: {e}")
+        return ([], [])
+    except (ValueError, AttributeError) as e:
+        st.error(f"Error parsing calendar data: {e}")
+        return ([], [])
+
+def convert_pto_format(pto_event: Dict[str, str], is_holiday: bool = False) -> Dict[str, Any]:
+    name = ""
+    if not is_holiday: # Extract first name and one char after it
+        summary = pto_event["summary"].lower().split()
+        name = f"{summary[0]} {summary[1][0]}"
+    else: # Extract holiday name in lowercase
+        name = pto_event["summary"].lower()
+
+    # Convert string dates to datetime objects
+    start = datetime.strptime(pto_event["start_date"], "%Y-%m-%d")
+    end = datetime.strptime(pto_event["end_date"], "%Y-%m-%d")
+
+    # Generate list of dates between start (inclusive) and end (exclusive)
+    delta = end - start
+    leave_dates = []
+    for i in range(delta.days):
+        current_date = start + timedelta(days=i)
+        # Only include weekdays (Monday = 0, Friday = 4)
+        if current_date.weekday() < 5:
+            leave_dates.append(current_date.strftime("%Y-%m-%d"))
+
+    return {
+        "name": name,
+        "leaveDates": leave_dates
+    }
+
+@st.cache_data(ttl=600)
+def fetch_pto_data() -> Tuple[List[PTOData], List[PTOData]]:
+    try:
+        ical_data = get_ical_data()
+        ptos = ical_data[0]
+        holidays = ical_data[1]
+        simplified_pto_data = []
+        simplified_holiday_data = []
+        for pto in ptos:
+            simplified_pto_data.append(convert_pto_format(pto))
+        for holiday in holidays:
+            simplified_holiday_data.append(convert_pto_format(holiday, True))
+        return simplified_pto_data, simplified_holiday_data
     except (
         requests.exceptions.HTTPError,
         requests.exceptions.RequestException,
         json.JSONDecodeError,
     ) as err:
         st.error(f"Error occurred while fetching PTO data: {err}")
-        return []
-
+        return [], []
 
 @st.cache_data(ttl=600)
-def load_data() -> Tuple[DataFrame, List[PTOData]]:
-    """
-    Loads employee data and PTO data.
-
-    The function fetches employee data from a CSV file specified by the URL in the
-    Streamlit secrets. It also fetches PTO data using the provided URL, username,
-    and password from the Streamlit secrets.
-
-    Returns:
-        Tuple[DataFrame, List[PTOData]]: A tuple containing the employee DataFrame
-        and a list of PTO data dictionaries.
-    """
-    employees_df: DataFrame = pd.read_csv(st.secrets["roaster_url"])
-    pto_calendar: List[PTOData] = fetch_pto_data(
-        st.secrets["pto_url"], st.secrets["username"], st.secrets["password"]
-    )
-    return employees_df, pto_calendar
+def load_data() -> Tuple[DataFrame, List[PTOData], List[PTOData]]:
+    employees_df: DataFrame = get_roaster()
+    pto_calendar: List[PTOData]
+    holiday_calendar: List[PTOData]
+    pto_calendar, holiday_calendar = fetch_pto_data()
+    return employees_df, pto_calendar, holiday_calendar
 
 
 ### Signin CSV Processing Functions ###
 @st.cache_data(ttl=600)
 def combine_csv_files(uploaded_files: List[bytes]) -> DataFrame:
-    """
-    Combines multiple CSV files into a single DataFrame.
-
-    Args:
-        uploaded_files (List[bytes]): A list of uploaded CSV files in bytes format.
-
-    Returns:
-        DataFrame: A combined DataFrame containing data from all uploaded CSV files.
-    """
     combined_df: DataFrame = DataFrame()
     for i, uploaded_file in enumerate(uploaded_files):
         df: DataFrame = pd.read_csv(
@@ -207,27 +252,11 @@ def combine_csv_files(uploaded_files: List[bytes]) -> DataFrame:
         combined_df = pd.concat([combined_df, df], ignore_index=True)
     return combined_df
 
-
 @st.cache_data(ttl=600)
 def calculate_date_range(
     combined_df: DataFrame,
 ) -> Tuple[datetime, datetime, bool, datetime, datetime]:
-    """
-    Calculates the date range from the combined DataFrame.
-
-    Args:
-        combined_df (DataFrame): The combined DataFrame containing sign-in data.
-
-    Returns:
-        Tuple[datetime, datetime, bool, datetime, datetime]: A tuple containing:
-            - start_date (datetime): The start date of the date range.
-            - end_date (datetime): The end date of the date range.
-            - more_than_7_days (bool): Whether the date range spans more than 7 days.
-            - min_date (datetime): The minimum date in the DataFrame.
-            - max_date (datetime): The maximum date in the DataFrame.
-    """
-    combined_df["In time"] = pd.to_datetime(
-        combined_df["In time"], format=DATE_FORMAT)
+    combined_df["In time"] = pd.to_datetime(combined_df["In time"], format=DATE_FORMAT)
     min_date: datetime = combined_df["In time"].min()
     max_date: datetime = combined_df["In time"].max()
     more_than_7_days: bool = (max_date - min_date).days > 7
@@ -239,30 +268,12 @@ def calculate_date_range(
     end_date: datetime = start_date + timedelta(days=6)
     return start_date, end_date, more_than_7_days, min_date, max_date
 
-
 @st.cache_data(ttl=600)
 def load_signin_data(
     uploaded_files: List[bytes],
 ) -> Tuple[DataFrame, datetime, datetime]:
-    """
-    Loads and processes sign-in data from uploaded CSV files.
-
-    This function combines multiple uploaded CSV files into a single DataFrame,
-    calculates the date range, and checks if the data covers more than 7 days.
-    If the data covers more than 7 days, a warning is displayed and the process
-    is stopped.
-
-    Args:
-        uploaded_files (List[bytes]): A list of uploaded CSV files in bytes format.
-
-    Returns:
-        Tuple[DataFrame, datetime, datetime]: A tuple containing the combined DataFrame,
-        the start date, and the end date of the date range.
-    """
     combined_df: DataFrame = combine_csv_files(uploaded_files)
-    start_date, end_date, more_than_7_days, min_date, max_date = calculate_date_range(
-        combined_df
-    )
+    start_date, end_date, more_than_7_days, min_date, max_date = calculate_date_range(combined_df)
     if more_than_7_days:
         st.warning(
             f"Your data covers more than 7 days ({min_date.strftime('%m/%d/%Y')} - "
@@ -273,31 +284,17 @@ def load_signin_data(
         st.success(f"Successfully uploaded {len(combined_df)} lines of data.")
     return combined_df, start_date, end_date
 
-
 @st.cache_data(ttl=600)
 def process_uploaded_files(
     uploaded_files: List[Any],
 ) -> Tuple[DataFrame, datetime, datetime]:
-    """
-    Processes uploaded files to extract sign-in data.
-
-    This function loads and processes sign-in data from the uploaded files by
-    calling the load_signin_data function.
-
-    Args:
-        uploaded_files (List[Any]): A list of uploaded files.
-
-    Returns:
-        Tuple[DataFrame, datetime, datetime]: A tuple containing the sign-in DataFrame,
-        the start date, and the end date of the date range.
-    """
     signin_df, start_date, end_date = load_signin_data(uploaded_files)
     return signin_df, start_date, end_date
 
 
 ### Singin Data Processing Functions ###
 def get_pto_dates(
-    pto_calendar: List[PTOData], pto_name: str, date_range: DatetimeIndex
+    pto_calendar: List[PTOData], holiday_calendar: List[PTOData], pto_name: str, date_range: DatetimeIndex
 ) -> List[datetime]:
     """
     Retrieves PTO dates for a specific employee within a given date range.
@@ -324,14 +321,21 @@ def get_pto_dates(
                 ).replace(hour=1, minute=0, second=0, microsecond=0)
                 if leave_date.weekday() in [1, 2, 3] and leave_date in date_range:
                     pto_dates.append(leave_date)
+    for holiday in holiday_calendar:
+        for leave_date in holiday["leaveDates"]:
+            leave_date: datetime = datetime.strptime(
+                leave_date, "%Y-%m-%d"
+            ).replace(hour=1, minute=0, second=0, microsecond=0)
+            if leave_date.weekday() in [1, 2, 3] and leave_date in date_range:
+                pto_dates.append(leave_date)
     return pto_dates
-
 
 def process_employee_signin(
     row: Dict[str, str],
     signin_df: DataFrame,
     date_range: DatetimeIndex,
     pto_calendar: List[PTOData],
+    holiday_calendar: List[PTOData],
 ) -> SignInData:
     """
     Processes the sign-in data for an employee.
@@ -344,40 +348,34 @@ def process_employee_signin(
         signin_df (DataFrame): A DataFrame containing sign-in data.
         date_range (DatetimeIndex): The range of dates to check for sign-ins.
         pto_calendar (List[PTOData]): A list of PTO data dictionaries.
+        holiday_calendar (List[PTOData]): A list of holiday data dictionaries.
 
     Returns:
         SignInData: A dictionary containing processed sign-in data for the employee.
     """
-    name: str = row["FULL_NAME"]
-    pto_name: str = row["JW_NAME"]
+    name: str = row["NAME"]
+    pto_name: str = row["JW_NAME"].lower()
+    signin_name: str = row["SIGNIN_NAME"].lower()
     dept: str = row["DEPARTMENT"]
     office: str = row["OFFICE"]
     required_days: int = int(row["REQUIRED_DAYS"])
 
     day_order: List[str] = ["Tue", "Wed", "Thu"]
-    present_days: DataFrame = signin_df[signin_df["Name"] == name]
-    present_days = present_days[
-        present_days["In time"].dt.strftime("%a").isin(["Tue", "Wed", "Thu"])
-    ]
-    present_dates: List[datetime] = list(
-        set(present_days["In time"].dt.strftime("%m/%d/%Y").tolist())
-    )
-    present_day_names: List[str] = set(
-        present_days["In time"].dt.strftime("%a"))
-    present_day_names: List[str] = sorted(
-        present_day_names, key=day_order.index)
-    pto_dates: List[datetime] = get_pto_dates(
-        pto_calendar, pto_name, date_range)
-    pto_dates: List[datetime] = sorted(
-        pto_dates, key=lambda date: day_order.index(date.strftime("%a"))
-    )
+    present_days = signin_df[signin_df["Name"].str.split().str[0].str.lower() + " " + signin_df["Name"].str.split().str[1].str[0].str.lower() == signin_name.split()[0].lower() + " " + signin_name.split()[1][0].lower()]
+    present_days = present_days[present_days["In time"].dt.strftime("%a").isin(["Tue", "Wed", "Thu"])]
+    present_dates: List[datetime] = list(set(present_days["In time"].dt.strftime("%m/%d/%Y").tolist()))
+    present_day_names: List[str] = set(present_days["In time"].dt.strftime("%a"))
+    present_day_names: List[str] = sorted(present_day_names, key=day_order.index)
+    pto_dates: List[datetime] = get_pto_dates(pto_calendar, holiday_calendar, pto_name, date_range)
+    pto_dates: List[datetime] = sorted(pto_dates, key=lambda date: day_order.index(date.strftime("%a")))
+    pto_day_names: List[str] = [date.strftime("%a") for date in pto_dates]
     pto_count: int = len(pto_dates)
     updated_required_days: int = max(0, required_days - pto_count)
     present_count: int = min(updated_required_days, len(present_days))
     status_ok: bool = not (present_count < updated_required_days)
-    absent_days: List[str] = [
-        item for item in ["Tue", "Wed", "Thu"] if item not in present_day_names
-    ]
+    accounted_days: List[str] = list(set(present_day_names + pto_day_names))
+    absent_days: List[str] = [item for item in ["Tue", "Wed", "Thu"] if item not in accounted_days]
+
     if status_ok:
         absent_days = []
 
@@ -401,12 +399,12 @@ def process_employee_signin(
         "REQUIRED": required_days,
     }
 
-
 def process_signin(
     signin_df: DataFrame,
     date_range: DatetimeIndex,
     employees_df: DataFrame,
     pto_calendar: List[PTOData],
+    holiday_calendar: List[PTOData],
 ) -> List[SignInData]:
     """
     Processes the sign-in data for all employees.
@@ -419,13 +417,13 @@ def process_signin(
         date_range (DatetimeIndex): The range of dates to check for sign-ins.
         employees_df (DataFrame): A DataFrame containing employee information.
         pto_calendar (List[PTOData]): A list of PTO data dictionaries.
+        holiday_calendar (List[PTOData]): A list of holiday data dictionaries.
 
     Returns:
-        List[SignInData]: A list of dictionaries containing processed sign-in data
-        for each employee.
+        List[SignInData]: A list of dictionaries containing processed sign-in data for each employee.
     """
     signin_summary: List[SignInData] = [
-        process_employee_signin(row, signin_df, date_range, pto_calendar)
+        process_employee_signin(row, signin_df, date_range, pto_calendar, holiday_calendar)
         for _, row in employees_df.iterrows()
     ]
     signin_summary = [row for row in signin_summary if row["REQUIRED"] != 0]
@@ -459,7 +457,6 @@ def highlight_row(row: Dict[str, str]) -> List[str]:
         )
     ] * len(row)
 
-
 def create_styled_dataframe(signin_summary: List[SignInData]) -> Styler:
     """
     Creates a styled DataFrame for the sign-in summary.
@@ -479,7 +476,6 @@ def create_styled_dataframe(signin_summary: List[SignInData]) -> Styler:
     df = df.sort_values(by=["DEPT", "OFFICE", "NAME"])
     return df.style.apply(highlight_row, axis=1)
 
-
 @st.cache_data(ttl=600)
 def convert_to_dataframe(signin_summary: List["SignInData"]) -> DataFrame:
     """
@@ -496,7 +492,6 @@ def convert_to_dataframe(signin_summary: List["SignInData"]) -> DataFrame:
         DataFrame: A pandas DataFrame containing the sign-in data.
     """
     return DataFrame(signin_summary)
-
 
 def get_filters() -> dict:
     """
@@ -540,7 +535,6 @@ def get_filters() -> dict:
             filters[filter_name]["selected_option"] = selected_option
     return filters
 
-
 def apply_filters(df: DataFrame, filters: dict) -> DataFrame:
     """
     Applies the selected filters to the DataFrame.
@@ -568,7 +562,6 @@ def apply_filters(df: DataFrame, filters: dict) -> DataFrame:
                 df = df[df[filter_info["column"]] == selected_option]
     return df
 
-
 @st.cache_data(ttl=600)
 def display_filtered_data(filtered_df: DataFrame) -> None:
     """
@@ -590,7 +583,6 @@ def display_filtered_data(filtered_df: DataFrame) -> None:
     st.dataframe(styled_signin_table, hide_index=True)
     st.html(
         f"<code class='num-of-rows'>Number of rows: {len(filtered_df)}</code>")
-
 
 def display_signin_summary(
     signin_summary: List["SignInData"], start_date: datetime, end_date: datetime
@@ -624,7 +616,6 @@ def display_signin_summary(
         st.warning("No data matches the filters.")
     else:
         display_filtered_data(filtered_df)
-
 
 def draw_chart(signin_summary: list) -> None:
     """
@@ -705,6 +696,7 @@ def draw_chart(signin_summary: list) -> None:
         )
         st.plotly_chart(pie_fig)
 
+
 ### Main Function ###
 def main() -> None:
     """
@@ -722,10 +714,11 @@ def main() -> None:
     if not check_password():
         st.stop()
 
+    st.cache_data.clear()
     st.title("Madwell Signin App")
     load_css("style.css")
 
-    employees_df, pto_calendar = load_data()
+    employees_df, pto_calendar, holiday_calendar = load_data()
     uploaded_files: List[Any] = st.file_uploader(
         "Choose CSV file(s) of weekly signin data. [ Sunday to Saturday ]",
         accept_multiple_files=True,
@@ -739,13 +732,12 @@ def main() -> None:
             date_range: DatetimeIndex = pd.date_range(
                 start=start_date, end=end_date)
             signin_summary: List[SignInData] = process_signin(
-                signin_df, date_range, employees_df, pto_calendar
+                signin_df, date_range, employees_df, pto_calendar, holiday_calendar
             )
             display_signin_summary(signin_summary, start_date, end_date)
             draw_chart(signin_summary)
     else:
         st.warning("Please upload the CSV file(s) to proceed.")
-
 
 if __name__ == "__main__":
     main()
