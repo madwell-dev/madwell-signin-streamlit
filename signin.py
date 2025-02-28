@@ -683,12 +683,17 @@ def draw_chart(signin_summary: list) -> None:
     with st.sidebar:
         num_of_all_employees = len(signin_summary)
         num_of_x_employees = sum(1 for entry in signin_summary if entry["STATUS"] == "X")
+        pie_data = pd.DataFrame({
+            'Status': ['O', 'X'],
+            'Count': [num_of_all_employees - num_of_x_employees, num_of_x_employees]
+        })
         pie_fig = px.pie(
-            values=[num_of_all_employees - num_of_x_employees, num_of_x_employees],
-            names=["O", "X"],
-            category_orders={"names": ["O", "X"]},
+            pie_data,
+            values='Count',
+            names='Status',
+            category_orders={"Status": ["O", "X"]},
             title="Signin Status",
-            color=["O", "X"],
+            color='Status',
             color_discrete_map={"O": STATUS_O_BG_COLOR, "X": STATUS_X_BG_COLOR},
         )
         pie_fig.update_layout(
